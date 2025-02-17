@@ -1,3 +1,4 @@
+import type { ChangeEvent } from 'react';
 import React, {
   useCallback,
   useEffect,
@@ -118,6 +119,9 @@ function SendFormComponent() {
   const [chainForAddressPositions, setChainForPositions] = useState<
     string | undefined
   >(undefined);
+
+  // Boolean status for preconfirmation
+  const [isPreconfirmation, setIsPreconfirmation] = useState<boolean>(false);
 
   const { data: positions } = useAddressBackendOrEvmPositions({
     address,
@@ -381,6 +385,7 @@ function SendFormComponent() {
           quantity: amount,
           chain,
         }),
+        isPreconfirmation,
       });
       if (preferences) {
         setPreferences({
@@ -551,6 +556,13 @@ function SendFormComponent() {
             ) : type === 'nft' ? (
               <NftTransferInput address={address} sendView={sendView} />
             ) : null}
+            <input
+              type="checkbox"
+              checked={isPreconfirmation}
+              onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                setIsPreconfirmation(event.target.checked)
+              }
+            />
           </VStack>
         </VStack>
       </form>

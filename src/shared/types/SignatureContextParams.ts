@@ -10,6 +10,7 @@ export interface TransactionContextParams {
   clientScope: ClientScope | null;
   addressAction: AnyAddressAction | null;
   quote?: Quote;
+  isPreconfirmation?: boolean;
 }
 
 export interface MessageContextParams {

@@ -17,6 +17,7 @@ export const DEFI_SDK_TESTNET_API_URL = backendUrl(process.env.DEFI_SDK_TESTNET_
 export const ZERION_API_URL = backendUrl(process.env.ZERION_API_URL, BACKEND_ENV);
 export const ZERION_TESTNET_API_URL = backendUrl(process.env.ZERION_TESTNET_API_URL, BACKEND_ENV);
 export const DEFI_SDK_TRANSACTIONS_API_URL = backendUrl(process.env.DEFI_SDK_TRANSACTIONS_API_URL, BACKEND_ENV);
+export const INTERSTATE_GATEWAY_URL = backendUrl(process.env.INTERSTATE_GATEWAY_URL, BACKEND_ENV);
 
 export const PROXY_URL = process.env.PROXY_URL;
 export const SOCIAL_API_URL = process.env.SOCIAL_API_URL;

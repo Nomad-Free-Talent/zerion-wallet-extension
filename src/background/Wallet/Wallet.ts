@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { ethers } from 'ethers';
 import { Provider as ZksProvider } from 'zksync-ethers';
 import type { Emitter } from 'nanoevents';
@@ -93,6 +94,7 @@ import {
   broadcastTransactionPatched,
   checkEip712Tx,
 } from 'src/modules/ethereum/account-abstraction/zksync-patch';
+import { INTERSTATE_GATEWAY_URL } from 'src/env/config';
 import type { DaylightEventParams, ScreenViewParams } from '../events';
 import { emitter } from '../events';
 import type { Credentials, SessionCredentials } from '../account/Credentials';
@@ -1150,10 +1152,12 @@ export class Wallet {
   private async sendTransaction({
     transaction: incomingTransaction,
     context,
+    isPreconfirmation,
     ...transactionContextParams
   }: {
     transaction: IncomingTransactionAA;
     context: Partial<ChannelContext> | undefined;
+    isPreconfirmation?: boolean;
   } & TransactionContextParams): Promise<SerializableTransactionResponse> {
     this.verifyInternalOrigin(context);
     if (!incomingTransaction.from) {
@@ -1214,23 +1218,42 @@ export class Wallet {
       }
     } else {
       try {
-        const signer = await this.getSigner(chainId);
-        const transactionResponse = await signer.sendTransaction({
-          ...transaction,
-          type: transaction.type ?? undefined, // to exclude null
-        });
-        const safeTx = removeSignature(transactionResponse);
+        if (isPreconfirmation) {
+          const proposer = await this.getProposer();
+          console.log(proposer);
+          throw new Error('Not ready');
+        } else {
+          const signer = await this.getSigner(chainId);
+          const transactionResponse = await signer.sendTransaction({
+            ...transaction,
+            type: transaction.type ?? undefined, // to exclude null
+          });
+          const safeTx = removeSignature(transactionResponse);
 
-        const safeTxPlain = toPlainTransactionResponse(safeTx);
-        emitter.emit('transactionSent', {
-          transaction: transactionResponse,
-          mode,
-          ...transactionContextParams,
-        });
-        return safeTxPlain;
+          const safeTxPlain = toPlainTransactionResponse(safeTx);
+          emitter.emit('transactionSent', {
+            transaction: transactionResponse,
+            mode,
+            ...transactionContextParams,
+          });
+          return safeTxPlain;
+        }
       } catch (error) {
         throw getEthersError(error);
       }
+    }
+  }
+
+  async getProposer() {
+    try {
+      // const { data } = await axios.get(`${config.HOLESKY_BOLT_GATEWAY_URL}/api/v1/proposers/lookahead?activeOnly=true&futureOnly=true`);
+      const { data } = await axios.get(`${INTERSTATE_GATEWAY_URL}/proposer`);
+      console.log('data is', data);
+      if (Array.isArray(data) && data.length != 0) return data;
+      else return;
+    } catch (err) {
+      console.log('err', err);
+      return;
     }
   }
 

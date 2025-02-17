@@ -23,6 +23,7 @@ import { WithReadonlyWarningDialog } from './ReadonlyWarningDialog';
 
 type SendTxParams = TransactionContextParams & {
   transaction: IncomingTransaction;
+  isPreconfirmation?: boolean;
 };
 
 export interface SendTxBtnHandle {
