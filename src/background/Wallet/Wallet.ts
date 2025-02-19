@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { ethers } from 'ethers';
+import { ethers, keccak256 } from 'ethers';
 import { Provider as ZksProvider } from 'zksync-ethers';
 import type { Emitter } from 'nanoevents';
 import { createNanoEvents } from 'nanoevents';
@@ -95,6 +95,7 @@ import {
   checkEip712Tx,
 } from 'src/modules/ethereum/account-abstraction/zksync-patch';
 import { INTERSTATE_GATEWAY_URL } from 'src/env/config';
+import { wait } from 'src/shared/wait';
 import type { DaylightEventParams, ScreenViewParams } from '../events';
 import { emitter } from '../events';
 import type { Credentials, SessionCredentials } from '../account/Credentials';
@@ -166,6 +167,14 @@ interface WalletEvents {
   switchChainError: (chainId: ChainId, origin: string) => void;
   permissionsUpdated: () => void;
 }
+
+type Proposer = {
+  slot: number;
+  validator_index: number;
+  sidecar_url: string;
+  source: string;
+  validator_pubkey: string;
+};
 
 export class Wallet {
   public id: string;
@@ -1219,9 +1228,12 @@ export class Wallet {
     } else {
       try {
         if (isPreconfirmation) {
-          const proposer = await this.getProposer();
-          console.log(proposer);
-          throw new Error('Not ready');
+          const proposer = await this.getProposerWithRetry();
+          const wallet = this.getOfflineSigner();
+          const signedTx = await wallet.signTransaction(transaction);
+
+          this.sendPreconfirmation(proposer, signedTx, wallet);
+          throw new Error('Still not sure');
         } else {
           const signer = await this.getSigner(chainId);
           const transactionResponse = await signer.sendTransaction({
@@ -1244,10 +1256,11 @@ export class Wallet {
     }
   }
 
-  async getProposer() {
+  async getProposer(): Promise<Proposer | undefined> {
     try {
-      // const { data } = await axios.get(`${config.HOLESKY_BOLT_GATEWAY_URL}/api/v1/proposers/lookahead?activeOnly=true&futureOnly=true`);
-      const { data } = await axios.get(`${INTERSTATE_GATEWAY_URL}/proposer`);
+      const { data } = await axios.get<Proposer>(
+        `${INTERSTATE_GATEWAY_URL}/proposer`
+      );
       console.log('data is', data);
       if (Array.isArray(data) && data.length != 0) return data;
       else return;
@@ -1255,6 +1268,120 @@ export class Wallet {
       console.log('err', err);
       return;
     }
+  }
+
+  async getProposerWithRetry(): Promise<Proposer> {
+    let proposer = await this.getProposer();
+    let count = 1;
+    while (!proposer) {
+      proposer = await this.getProposer();
+      count++;
+      console.log(`tried ${count} times to find proposers, but not.`);
+
+      await wait(16 * 12 * 1000);
+    }
+    return proposer;
+  }
+
+  async sendPreconfirmation(
+    proposer: Proposer,
+    signedTx: string,
+    wallet: ethers.Wallet
+  ) {
+    const txHash = keccak256(signedTx);
+    const slot = proposer.slot;
+    // const slot = 1
+    const slotBytes = this.numberToLittleEndianBytes(slot);
+    const txHashBytes = this.hexToBytes(txHash);
+
+    const message = new Uint8Array(slotBytes.length + txHashBytes.length);
+    message.set(slotBytes);
+    message.set(txHashBytes, slotBytes.length);
+    const messageDigest = keccak256(message);
+    const signature = wallet.signingKey.sign(messageDigest).serialized;
+
+    const sidecar_message = new Uint8Array(
+      slotBytes.length + txHashBytes.length
+    );
+
+    if (proposer.source === 'interstate') {
+      const signer = await wallet.getAddress();
+      const message1 = new Uint8Array(txHashBytes.length);
+      message1.set(txHashBytes);
+      const messageDigest1 = keccak256(message1);
+      const signature1 = wallet.signingKey.sign(messageDigest1).serialized;
+      await axios.post(`${INTERSTATE_GATEWAY_URL}/submit`, {
+        proposer,
+        signed_tx: signedTx,
+        sidecar_signature: signature1,
+        signature,
+        signer,
+      });
+      console.log(
+        `preconfirmation ${txHash} will be sent for slot ${slot} to validator:${proposer.validator_pubkey}}`
+      );
+    } else if (proposer.source === 'bolt') {
+      sidecar_message.set(txHashBytes);
+      sidecar_message.set(slotBytes, txHashBytes.length);
+      const messageDigest = keccak256(sidecar_message);
+      const sidecar_signature =
+        wallet.signingKey.sign(messageDigest).serialized;
+
+      const signer = await wallet.getAddress();
+      const body = {
+        proposer,
+        signed_tx: signedTx,
+        sidecar_signature,
+        signature,
+        signer,
+      };
+      console.log('boday', body);
+      try {
+        await axios.post(`${INTERSTATE_GATEWAY_URL}/submit`, body, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (err) {
+        console.log('bolt submit error: ', err);
+      }
+
+      console.log(
+        `preconfirmation with tx: ${txHash} will be sent for slot ${slot} to validator with index ${proposer.validator_index}`
+      );
+    } else if (proposer.source === 'primev') {
+      try {
+        const signer = await wallet.getAddress();
+        await axios.post(`${INTERSTATE_GATEWAY_URL}/submit`, {
+          proposer,
+          signed_tx: signedTx,
+          sidecar_signature: signature,
+          signature,
+          signer,
+        });
+        console.log(
+          `preconfirmation with tx: ${txHash} will be sent for slot ${slot} to validator with index ${proposer.validator_index}`
+        );
+      } catch (err) {
+        console.log('err mev-premev', err);
+      }
+    }
+  }
+
+  // Function to convert a number to a little-endian byte array
+  numberToLittleEndianBytes(num: number) {
+    const buffer = new ArrayBuffer(8); // Assuming slot_number is a 64-bit integer
+    const view = new DataView(buffer);
+    view.setUint32(0, num, true); // true for little-endian
+    return new Uint8Array(buffer);
+  }
+
+  // Function to decode a hex string to a byte array
+  hexToBytes(hex: string) {
+    hex = hex.replace(/^0x/, ''); // Remove "0x" prefix if present
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+    }
+    return bytes;
   }
 
   async signAndSendTransaction({
